@@ -1,96 +1,66 @@
 import sqlite3
 import os
+import requests
 import jaconv
 from datetime import date, timedelta
 
-# Dynamically locate the database file based on the folder structure
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(SCRIPT_DIR, '..', 'data', 'nihongo_graph.db')
 
-def add_concept(cursor):
-    print("\n" + "="*40)
-    print("           ADD NEW CONCEPT")
-    print("="*40)
-    
-    kanji = input("Kanji (or Word): ").strip()
-    
-    # Auto-convert Romaji to Hiragana using jaconv
-    romaji_hiragana = input("Hiragana reading (type in romaji): ").strip()
-    hiragana = jaconv.alphabet2kana(romaji_hiragana)
-    print(f"  -> Converted to: {hiragana}")
-    
-    # Auto-convert Romaji to Katakana using jaconv
-    romaji_katakana = input("Katakana reading (type in romaji, or Enter to skip): ").strip()
-    katakana = ""
-    if romaji_katakana:
-        katakana = jaconv.alphabet2kana(romaji_katakana)
-        print(f"  -> Converted to: {katakana}")
-    
+def fetch_api_options(romaji_input):
+    kana_query = jaconv.alphabet2kana(romaji_input)
+    url = f"https://jisho.org/api/v1/search/words?keyword={kana_query}"
     try:
-        jlpt = int(input("JLPT Level (e.g., 5): ").strip())
-    except ValueError:
-        jlpt = 5 # Default to N5
+        response = requests.get(url)
+        data = response.json()
+        options = []
+        for item in data.get('data', [])[:5]:
+            japanese = item.get('japanese', [{}])[0]
+            kanji = japanese.get('word', japanese.get('reading'))
+            reading = japanese.get('reading', '')
+            meaning = item.get('senses', [{}])[0].get('english_definitions', ['No meaning'])[0]
+            options.append({'kanji': kanji, 'reading': reading, 'meaning': meaning})
+        return options
+    except:
+        return []
 
-    cursor.execute('''
-        INSERT INTO Concept (kanji, hiragana, katakana, jlpt_level)
-        VALUES (?, ?, ?, ?)
-    ''', (kanji, hiragana, katakana, jlpt))
-    
-    concept_id = cursor.lastrowid
-    return concept_id, kanji
-
-def add_components(cursor, target_id, target_kanji):
-    print(f"\n--- Link components to [{target_kanji}] ---")
-    print("(Enter the component Kanji. Press Enter with a blank line to finish)")
-    
-    while True:
-        source_kanji = input("> Component: ").strip()
-        if not source_kanji:
-            break
-            
-        cursor.execute("SELECT concept_id FROM Concept WHERE kanji = ?", (source_kanji,))
-        result = cursor.fetchone()
-        
-        if result:
-            source_id = result[0]
-            try:
-                cursor.execute('''
-                    INSERT INTO Connection (source_id, target_id, relationship_type)
-                    VALUES (?, ?, 'component')
-                ''', (source_id, target_id))
-                print(f"  [SUCCESS] Linked: {source_kanji} -> {target_kanji}")
-            except sqlite3.IntegrityError:
-                print(f"  [WARNING] Link between {source_kanji} and {target_kanji} already exists.")
-        else:
-            print(f"  [ERROR] Kanji '{source_kanji}' not found. Please add it to the DB first.")
-
-def init_progress(cursor, concept_id):
-    today = date.today()
-    tomorrow = today + timedelta(days=1)
-    cursor.execute('''
-        INSERT INTO Progress (concept_id, hit_rate, last_review, next_review)
-        VALUES (?, 0.0, ?, ?)
-    ''', (concept_id, today, tomorrow))
-
-def main():
-    print("Starting NihongoGraph Data Entry Pipeline...")
-    
+def save_to_db(option):
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("PRAGMA foreign_keys = ON;")
-        
-        while True:
-            concept_id, kanji = add_concept(cursor)
-            add_components(cursor, concept_id, kanji)
-            init_progress(cursor, concept_id)
-            
+        try:
+            cursor.execute('''INSERT INTO Concept (kanji, hiragana, jlpt_level) VALUES (?, ?, ?)''', 
+                           (option['kanji'], option['reading'], 5))
+            concept_id = cursor.lastrowid
+            # Init Progress for SRS
+            today = date.today()
+            cursor.execute('''INSERT INTO Progress (concept_id, last_review, next_review) VALUES (?, ?, ?)''',
+                           (concept_id, today, today + timedelta(days=1)))
             conn.commit()
-            print(f"\n[OK] Concept '{kanji}' fully saved to database.")
+            return True
+        except sqlite3.IntegrityError:
+            print("  [!] Concept already exists in your graph.")
+            return False
+
+def main():
+    print("--- NIHONGOGRAPH SMART ENTRY (DAY 2) ---")
+    while True:
+        query = input("\nSearch word in Romaji (or 'q' to quit): ").strip()
+        if query.lower() == 'q': break
+        
+        results = fetch_api_options(query)
+        if not results:
+            print("No results found.")
+            continue
             
-            cont = input("\nAdd another concept? (y/n): ").strip().lower()
-            if cont != 'y':
-                print("Exiting pipeline. See you next time!")
-                break
+        for i, opt in enumerate(results):
+            print(f"[{i+1}] {opt['kanji']} ({opt['reading']}) - {opt['meaning']}")
+            
+        choice = input("\nSelect number to save (or Enter to skip): ")
+        if choice.isdigit() and 0 < int(choice) <= len(results):
+            selected = results[int(choice)-1]
+            if save_to_db(selected):
+                print(f"  [SUCCESS] {selected['kanji']} added to your graph.")
 
 if __name__ == '__main__':
     main()
