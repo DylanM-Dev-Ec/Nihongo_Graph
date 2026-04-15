@@ -19,7 +19,14 @@ def fetch_api_options(romaji_input):
             kanji = japanese.get('word', japanese.get('reading'))
             reading = japanese.get('reading', '')
             meaning = item.get('senses', [{}])[0].get('english_definitions', ['No meaning'])[0]
-            options.append({'kanji': kanji, 'reading': reading, 'meaning': meaning})
+            
+            # --- AQUÍ CALCULAMOS EL JLPT ---
+            jlpt_list = item.get('jlpt', [])
+            jlpt_num = int(jlpt_list[0].replace('jlpt-n', '')) if jlpt_list else 0
+            
+            # --- AQUÍ VA TU LÍNEA (Reemplaza a la vieja) ---
+            options.append({'kanji': kanji, 'reading': reading, 'meaning': meaning, 'jlpt': jlpt_num})
+            
         return options
     except:
         return []
@@ -42,25 +49,35 @@ def save_to_db(option):
             print("  [!] Concept already exists in your graph.")
             return False
 
+# Main entry point for the CLI application
 def main():
-    print("--- NIHONGOGRAPH SMART ENTRY (DAY 2) ---")
+    print("--- NIHONGOGRAPH SMART ENTRY (DÍA 2) ---")
     while True:
-        query = input("\nSearch word in Romaji (or 'q' to quit): ").strip()
-        if query.lower() == 'q': break
+        # Prompt user for Romaji input
+        query = input("\nBusca una palabra en Romaji (o 'q' para salir): ").strip()
+        if query.lower() == 'q': 
+            break
         
+        # Fetch data from Jisho API using the provided query
         results = fetch_api_options(query)
+        
+        # Handle empty responses from the API
         if not results:
-            print("No results found.")
+            print("  [!] No se encontraron resultados. Intenta otra lectura.")
             continue
             
+        # Iterate through the API results and display them to the user
         for i, opt in enumerate(results):
-            print(f"[{i+1}] {opt['kanji']} ({opt['reading']}) - {opt['meaning']}")
+            # Format JLPT level for display. Example: 'N5' or 'Sin nivel'
+            jlpt_display = f"N{opt['jlpt']}" if opt['jlpt'] > 0 else "Sin nivel"
+            print(f"[{i+1}] {opt['kanji']} ({opt['reading']}) - {opt['meaning']} | JLPT: {jlpt_display}")
             
-        choice = input("\nSelect number to save (or Enter to skip): ")
+        # Handle user selection and execute database insertion
+        choice = input("\nSelecciona un número para guardar (o presiona Enter para saltar): ")
         if choice.isdigit() and 0 < int(choice) <= len(results):
             selected = results[int(choice)-1]
             if save_to_db(selected):
-                print(f"  [SUCCESS] {selected['kanji']} added to your graph.")
+                print(f"  [ÉXITO] '{selected['kanji']}' agregado a tu grafo de conocimiento.")
 
 if __name__ == '__main__':
     main()
