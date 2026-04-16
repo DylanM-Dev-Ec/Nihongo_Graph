@@ -32,27 +32,76 @@ def fetch_api_options(romaji_input):
         return []
 
 def save_to_db(option):
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        cursor.execute("PRAGMA foreign_keys = ON;")
-        try:
-            cursor.execute('''INSERT INTO Concept (kanji, hiragana, jlpt_level) VALUES (?, ?, ?)''', 
-                           (option['kanji'], option['reading'], 5))
-            concept_id = cursor.lastrowid
-            # Init Progress for SRS
-            today = date.today()
-            cursor.execute('''INSERT INTO Progress (concept_id, last_review, next_review) VALUES (?, ?, ?)''',
-                           (concept_id, today, today + timedelta(days=1)))
+    """
+    Saves the concept and returns its unique database ID.
+    Required for establishing graph relationships.
+    """
+    try:
+        # Use your exact database filename: nihongo_graph.db
+        with sqlite3.connect('nihongo_graph.db') as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO Concept (kanji, hiragana, jlpt_level, meaning) 
+                VALUES (?, ?, ?, ?)
+            ''', (option['kanji'], option['reading'], option['jlpt'], option['meaning']))
+            conn.commit()
+            # This is the 'magic' line: returns the last inserted ID
+            return cursor.lastrowid 
+    except sqlite3.Error as e:
+        print(f"  [Error] Database insertion failed: {e}")
+        return None
+def find_related_concepts(current_id, meaning_text):
+    """
+    Scans the database for concepts that share similar meanings.
+    """
+    try:
+        with sqlite3.connect('nihongo_graph.db') as conn:
+            cursor = conn.cursor()
+            # We look for words with similar English meanings
+            query = "SELECT id, kanji, meaning FROM Concept WHERE meaning LIKE ? AND id != ?"
+            search_term = f"%{meaning_text}%"
+            cursor.execute(query, (search_term, current_id))
+            return cursor.fetchall()
+    except sqlite3.Error:
+        return []
+
+def link_concepts(source, target, rel_type="context"):
+    """
+    Creates a new entry in the Relationships table.
+    """
+    try:
+        with sqlite3.connect('nihongo_graph.db') as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO Relationships (source_id, target_id, relation_type) VALUES (?, ?, ?)",
+                           (source, target, rel_type))
             conn.commit()
             return True
-        except sqlite3.IntegrityError:
-            print("  [!] Concept already exists in your graph.")
-            return False
-
+    except sqlite3.Error:
+        return False
 # Main entry point for the CLI application
 def main():
     print("--- NIHONGOGRAPH SMART ENTRY (DÍA 2) ---")
     while True:
+        choice = input("\nSelecciona un número para guardar (o Enter para omitir): ")
+        if choice.isdigit() and 0 < int(choice) <= len(results):
+            selected = results[int(choice)-1]
+            
+            # Step 1: Save and get the ID
+            new_concept_id = save_to_db(selected)
+            
+            if new_concept_id:
+                print(f"  [ÉXITO] '{selected['kanji']}' guardado con éxito.")
+                
+                # Step 2: Intelligent linking
+                rel_words = find_related_concepts(new_concept_id, selected['meaning'])
+                
+                if rel_words:
+                    print("\n  [?] He detectado conexiones potenciales en tu grafo:")
+                    for r_id, r_kanji, r_meaning in rel_words:
+                        link_ask = input(f"      ¿Conectar con '{r_kanji}' ({r_meaning})? (s/n): ")
+                        if link_ask.lower() == 's':
+                            if link_concepts(new_concept_id, r_id):
+                                print(f"      [LINK] Conexión establecida.")
         # Prompt user for Romaji input
         query = input("\nBusca una palabra en Romaji (o 'q' para salir): ").strip()
         if query.lower() == 'q': 
