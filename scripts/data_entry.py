@@ -2,6 +2,7 @@ import sqlite3
 import os
 import requests
 import jaconv
+import json
 from datetime import date, timedelta
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -32,27 +33,76 @@ def fetch_api_options(romaji_input):
         return []
 
 def save_to_db(option):
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        cursor.execute("PRAGMA foreign_keys = ON;")
-        try:
-            cursor.execute('''INSERT INTO Concept (kanji, hiragana, jlpt_level) VALUES (?, ?, ?)''', 
-                           (option['kanji'], option['reading'], 5))
-            concept_id = cursor.lastrowid
-            # Init Progress for SRS
-            today = date.today()
-            cursor.execute('''INSERT INTO Progress (concept_id, last_review, next_review) VALUES (?, ?, ?)''',
-                           (concept_id, today, today + timedelta(days=1)))
+    """
+    Saves the concept and returns its unique database ID.
+    Required for establishing graph relationships.
+    """
+    try:
+        # Use your exact database filename: nihongo_graph.db
+        with sqlite3.connect('nihongo_graph.db') as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO Concept (kanji, hiragana, jlpt_level, meaning) 
+                VALUES (?, ?, ?, ?)
+            ''', (option['kanji'], option['reading'], option['jlpt'], option['meaning']))
+            conn.commit()
+            # This is the 'magic' line: returns the last inserted ID
+            return cursor.lastrowid 
+    except sqlite3.Error as e:
+        print(f"  [Error] Database insertion failed: {e}")
+        return None
+def find_related_concepts(current_id, meaning_text):
+    """
+    Scans the database for concepts that share similar meanings.
+    """
+    try:
+        with sqlite3.connect('nihongo_graph.db') as conn:
+            cursor = conn.cursor()
+            # We look for words with similar English meanings
+            query = "SELECT id, kanji, meaning FROM Concept WHERE meaning LIKE ? AND id != ?"
+            search_term = f"%{meaning_text}%"
+            cursor.execute(query, (search_term, current_id))
+            return cursor.fetchall()
+    except sqlite3.Error:
+        return []
+
+def link_concepts(source, target, rel_type="context"):
+    """
+    Creates a new entry in the Relationships table.
+    """
+    try:
+        with sqlite3.connect('nihongo_graph.db') as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO Relationships (source_id, target_id, relation_type) VALUES (?, ?, ?)",
+                           (source, target, rel_type))
             conn.commit()
             return True
-        except sqlite3.IntegrityError:
-            print("  [!] Concept already exists in your graph.")
-            return False
-
+    except sqlite3.Error:
+        return False
 # Main entry point for the CLI application
 def main():
     print("--- NIHONGOGRAPH SMART ENTRY (DÍA 2) ---")
     while True:
+        choice = input("\nSelecciona un número para guardar (o Enter para omitir): ")
+        if choice.isdigit() and 0 < int(choice) <= len(results):
+            selected = results[int(choice)-1]
+            
+            # Step 1: Save and get the ID
+            new_concept_id = save_to_db(selected)
+            
+            if new_concept_id:
+                print(f"  [ÉXITO] '{selected['kanji']}' guardado con éxito.")
+                
+                # Step 2: Intelligent linking
+                rel_words = find_related_concepts(new_concept_id, selected['meaning'])
+                
+                if rel_words:
+                    print("\n  [?] He detectado conexiones potenciales en tu grafo:")
+                    for r_id, r_kanji, r_meaning in rel_words:
+                        link_ask = input(f"      ¿Conectar con '{r_kanji}' ({r_meaning})? (s/n): ")
+                        if link_ask.lower() == 's':
+                            if link_concepts(new_concept_id, r_id):
+                                print(f"      [LINK] Conexión establecida.")
         # Prompt user for Romaji input
         query = input("\nBusca una palabra en Romaji (o 'q' para salir): ").strip()
         if query.lower() == 'q': 
@@ -78,6 +128,61 @@ def main():
             selected = results[int(choice)-1]
             if save_to_db(selected):
                 print(f"  [ÉXITO] '{selected['kanji']}' agregado a tu grafo de conocimiento.")
+    
+def create_edge(source_id, target_id, relation="context"):
+    """
+    Creates a link between concepts only if it doesn't exist yet.
+    Ensures graph data integrity.
+    """
+    try:
+        with sqlite3.connect('nihongo_graph.db') as conn:
+            cursor = conn.cursor()
+            
+            # 1. Check if the connection already exists in either direction
+            check_query = """
+                SELECT id FROM Relationships 
+                WHERE (source_id = ? AND target_id = ?) 
+                OR (source_id = ? AND target_id = ?)
+            """
+            cursor.execute(check_query, (source_id, target_id, target_id, source_id))
+            
+            if cursor.fetchone():
+                print("  [INFO] Esta conexión ya existe en el grafo. Omitiendo...")
+                return False
+            
+            # 2. If it's new, insert it
+            cursor.execute("INSERT INTO Relationships (source_id, target_id, relation_type) VALUES (?, ?, ?)", 
+                           (source_id, target_id, relation))
+            conn.commit()
+            return True
+    except sqlite3.Error as e:
+        print(f"  [LOG] Error al crear la conexión: {e}")
+        return False
 
+def export_graph_to_json(filename="graph_data.json"):
+    """
+    Exports the entire graph (nodes and edges) to a JSON file.
+    This is the first step toward a visual interface.
+    """
+    try:
+        with sqlite3.connect('nihongo_graph.db') as conn:
+            cursor = conn.cursor()
+            
+            # Extract Nodes (Concepts)
+            cursor.execute("SELECT id, kanji, meaning, jlpt_level FROM Concept")
+            nodes = [{"id": r[0], "label": r[1], "title": r[2], "group": r[3]} for r in cursor.fetchall()]
+            
+            # Extract Edges (Relationships)
+            cursor.execute("SELECT source_id, target_id, relation_type FROM Relationships")
+            edges = [{"from": r[0], "to": r[1], "label": r[2]} for r in cursor.fetchall()]
+            
+            graph_data = {"nodes": nodes, "edges": edges}
+            
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(graph_data, f, ensure_ascii=False, indent=4)
+            
+            print(f"\n  [SUCCESS] Grafo exportado a {filename}")
+    except Exception as e:
+        print(f"  [ERROR] La exportación falló: {e}")
 if __name__ == '__main__':
     main()
