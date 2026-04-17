@@ -2,6 +2,7 @@ import sqlite3
 import os
 import requests
 import jaconv
+import json
 from datetime import date, timedelta
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -127,6 +128,61 @@ def main():
             selected = results[int(choice)-1]
             if save_to_db(selected):
                 print(f"  [ÉXITO] '{selected['kanji']}' agregado a tu grafo de conocimiento.")
+    
+def create_edge(source_id, target_id, relation="context"):
+    """
+    Creates a link between concepts only if it doesn't exist yet.
+    Ensures graph data integrity.
+    """
+    try:
+        with sqlite3.connect('nihongo_graph.db') as conn:
+            cursor = conn.cursor()
+            
+            # 1. Check if the connection already exists in either direction
+            check_query = """
+                SELECT id FROM Relationships 
+                WHERE (source_id = ? AND target_id = ?) 
+                OR (source_id = ? AND target_id = ?)
+            """
+            cursor.execute(check_query, (source_id, target_id, target_id, source_id))
+            
+            if cursor.fetchone():
+                print("  [INFO] Esta conexión ya existe en el grafo. Omitiendo...")
+                return False
+            
+            # 2. If it's new, insert it
+            cursor.execute("INSERT INTO Relationships (source_id, target_id, relation_type) VALUES (?, ?, ?)", 
+                           (source_id, target_id, relation))
+            conn.commit()
+            return True
+    except sqlite3.Error as e:
+        print(f"  [LOG] Error al crear la conexión: {e}")
+        return False
 
+def export_graph_to_json(filename="graph_data.json"):
+    """
+    Exports the entire graph (nodes and edges) to a JSON file.
+    This is the first step toward a visual interface.
+    """
+    try:
+        with sqlite3.connect('nihongo_graph.db') as conn:
+            cursor = conn.cursor()
+            
+            # Extract Nodes (Concepts)
+            cursor.execute("SELECT id, kanji, meaning, jlpt_level FROM Concept")
+            nodes = [{"id": r[0], "label": r[1], "title": r[2], "group": r[3]} for r in cursor.fetchall()]
+            
+            # Extract Edges (Relationships)
+            cursor.execute("SELECT source_id, target_id, relation_type FROM Relationships")
+            edges = [{"from": r[0], "to": r[1], "label": r[2]} for r in cursor.fetchall()]
+            
+            graph_data = {"nodes": nodes, "edges": edges}
+            
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(graph_data, f, ensure_ascii=False, indent=4)
+            
+            print(f"\n  [SUCCESS] Grafo exportado a {filename}")
+    except Exception as e:
+        print(f"  [ERROR] La exportación falló: {e}")
 if __name__ == '__main__':
     main()
