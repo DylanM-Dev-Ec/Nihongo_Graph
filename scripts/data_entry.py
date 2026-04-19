@@ -79,6 +79,40 @@ def link_concepts(source, target, rel_type="context"):
             return True
     except sqlite3.Error:
         return False
+def display_dashboard():
+    """
+    Shows a quick summary of the current state of the Knowledge Graph.
+    Boosts motivation by showing real progress.
+    """
+    try:
+        with sqlite3.connect('nihongo_graph.db') as conn:
+            cursor = conn.cursor()
+            
+            # Count total words (Nodes)
+            cursor.execute("SELECT COUNT(*) FROM Concept")
+            total_concepts = cursor.fetchone()[0]
+            
+            # Count total links (Edges)
+            cursor.execute("SELECT COUNT(*) FROM Relationships")
+            total_links = cursor.fetchone()[0]
+            
+            # Count words by JLPT level
+            cursor.execute("SELECT jlpt_level, COUNT(*) FROM Concept GROUP BY jlpt_level")
+            levels = cursor.fetchall()
+
+            print("\n" + "="*40)
+            print("   📊 NIHONGOGRAPH PROGRESS REPORT")
+            print("="*40)
+            print(f"  • Concepts Learned: {total_concepts}")
+            print(f"  • Graph Connections: {total_links}")
+            print("-" * 40)
+            for lv, count in levels:
+                lv_label = f"N{lv}" if lv > 0 else "Unranked"
+                print(f"  • {lv_label}: {count} words")
+            print("="*40 + "\n")
+            
+    except sqlite3.Error as e:
+        print(f"  [LOG] Could not load dashboard: {e}")
 # Main entry point for the CLI application
 def main():
     print("--- NIHONGOGRAPH SMART ENTRY (DÍA 2) ---")
@@ -184,5 +218,6 @@ def export_graph_to_json(filename="graph_data.json"):
             print(f"\n  [SUCCESS] Grafo exportado a {filename}")
     except Exception as e:
         print(f"  [ERROR] La exportación falló: {e}")
+
 if __name__ == '__main__':
     main()
