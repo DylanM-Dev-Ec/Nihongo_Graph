@@ -1,0 +1,34 @@
+{
+    "nodes": [
+        {
+            "id": 1,
+            "label": "水",
+            "title": "みず",
+            "group": 5
+        },
+        {
+            "id": 2,
+            "label": "飲む",
+            "title": "のむ",
+            "group": 5
+        },
+        {
+            "id": 3,
+            "label": "お茶",
+            "title": "おちゃ",
+            "group": 5
+        }
+    ],
+    "edges": [
+        {
+            "from": 1,
+            "to": 2,
+            "label": "verbo_asociado"
+        },
+        {
+            "from": 3,
+            "to": 2,
+            "label": "verbo_asociado"
+        }
+    ]
+}
