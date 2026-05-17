@@ -1,9 +1,16 @@
-# NihongoGraph: Relational Database Architecture
+# Kioku Engine (MVP)
 
-This project utilizes a graph architecture stored in SQLite to manage Japanese language acquisition through a spaced repetition system (SRS).
+An optimized memory retention and spaced repetition engine (SRS) designed for structured Japanese language acquisition, utilizing a localized relational graph architecture in SQLite.
 
-## Entity-Relationship Model (Reflexive Graph)
+## Project Scope (MVP Limits)
+To avoid scope creep and ensure system stability, this iteration is strictly constrained to:
+- **Core Syllabaries:** Complete Hiragana and Katakana character mapping.
+- **Vocabulary Baseline:** First 50 foundational N5 Kanjis and their core radical components.
+- **SRS Execution:** Algorithmic scheduling based on a modified SM-2 (SuperMemo-2) interval calculation.
 
+## Technical Architecture
+
+### Relational Schema (Reflexive Graph)
 ```mermaid
 erDiagram
     CONCEPT ||--o{ CONNECTION : "is source of"
@@ -28,6 +35,9 @@ erDiagram
         int progress_id PK
         int concept_id FK
         float hit_rate
+        int interval_days
+        int repetitions
+        float ease_factor
         date last_review
         date next_review
     }
