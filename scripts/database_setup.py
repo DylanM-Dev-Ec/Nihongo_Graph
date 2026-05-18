@@ -1,7 +1,18 @@
 import sqlite3
+import os
+
+# Dynamically locate the database file to ensure it goes to the 'data' folder
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(SCRIPT_DIR, '..', 'data')
+DB_PATH = os.path.join(DATA_DIR, 'kioku_engine.db')
 
 def initialize_db():
-    with sqlite3.connect('nihongo_graph.db') as conn:
+    # Ensure 'data' directory exists
+    if not os.path.exists(DATA_DIR):
+        os.makedirs(DATA_DIR)
+
+    # Connect using the absolute path
+    with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
         
         # Enforce foreign key constraints
@@ -30,12 +41,14 @@ def initialize_db():
         )
         ''')
 
-        # 3. Progress Table (User Tracking)
+        # 3. Progress Table (User Tracking - SM-2 Refactored)
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS Progress (
             progress_id INTEGER PRIMARY KEY AUTOINCREMENT,
             concept_id INTEGER UNIQUE,
-            hit_rate REAL DEFAULT 0.0,
+            interval_days INTEGER DEFAULT 0,
+            repetitions INTEGER DEFAULT 0,
+            ease_factor REAL DEFAULT 2.5,
             last_review DATE,
             next_review DATE,
             FOREIGN KEY (concept_id) REFERENCES Concept(concept_id) ON DELETE CASCADE
@@ -43,7 +56,7 @@ def initialize_db():
         ''')
 
         conn.commit()
-        print("Database 'nihongo_graph.db' created successfully.")
+        print(f"[OK] Database created successfully at: {DB_PATH}")
 
 if __name__ == '__main__':
     initialize_db()

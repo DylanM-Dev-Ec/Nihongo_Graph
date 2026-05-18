@@ -5,54 +5,61 @@ from datetime import date, timedelta
 
 # Dynamically locate the database file based on the folder structure
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(SCRIPT_DIR, '..', 'data', 'nihongo_graph.db')
+DB_PATH = os.path.join(SCRIPT_DIR, '..', 'data', 'kioku_engine.db')
 
 def fetch_due_reviews(cursor):
-    """Fetches concepts scheduled for review today or earlier."""
-    today = date.today()
+    """Fetches concepts scheduled for review today or earlier, including new items."""
+    today = date.today().isoformat()
     cursor.execute('''
-        SELECT c.concept_id, c.kanji, c.hiragana, p.hit_rate, p.last_review, p.next_review
+        SELECT c.concept_id, c.kanji, c.hiragana, p.interval_days, p.repetitions, p.ease_factor
         FROM Concept c
         JOIN Progress p ON c.concept_id = p.concept_id
-        WHERE p.next_review <= ?
+        WHERE p.next_review <= ? OR p.next_review IS NULL
     ''', (today,))
     return cursor.fetchall()
 
-def update_progress(cursor, concept_id, passed, current_hit_rate, last_review):
-    """Calculates and updates the forgetting curve mathematically."""
-    today = date.today()
+def update_progress(cursor, concept_id, passed, current_interval, repetitions, ease_factor):
+    """Calculates and updates the SuperMemo-2 (SM-2) algorithm variables."""
+    today = date.today().isoformat()
     
-    # Calculate days since last review to determine current interval
-    if last_review:
-        last_date = date.fromisoformat(last_review)
-        current_interval = (today - last_date).days
-        if current_interval < 1:
-            current_interval = 1
-    else:
-        current_interval = 1
+    # Map binary pass/fail to SM-2 quality (q) scale (0-5)
+    # 4: Correct response (standard for typed input)
+    # 0: Complete blackout / wrong answer
+    q = 4 if passed else 0
 
-    if passed:
-        # Exponential multiplier: if correct, double the interval
-        new_interval = current_interval * 2
-        new_hit_rate = min(1.0, current_hit_rate + 0.1) # Max hit rate is 100%
+    # Calculate new SM-2 values
+    if q >= 3:
+        if repetitions == 0:
+            new_interval = 1
+        elif repetitions == 1:
+            new_interval = 6
+        else:
+            new_interval = round(current_interval * ease_factor)
+        new_repetitions = repetitions + 1
     else:
-        # Penalty: if incorrect, reset interval to 1 day
+        new_repetitions = 0
         new_interval = 1
-        new_hit_rate = max(0.0, current_hit_rate - 0.2) # Min hit rate is 0%
 
-    next_review_date = today + timedelta(days=new_interval)
+    # Calculate new ease factor
+    new_ease_factor = ease_factor + (0.1 - (5 - q) * (0.08 + (5 - q) * 0.02))
+    
+    # Floor limit for ease_factor
+    if new_ease_factor < 1.3:
+        new_ease_factor = 1.3
+
+    next_review_date = (date.today() + timedelta(days=new_interval)).isoformat()
 
     cursor.execute('''
         UPDATE Progress
-        SET hit_rate = ?, last_review = ?, next_review = ?
+        SET interval_days = ?, repetitions = ?, ease_factor = ?, last_review = ?, next_review = ?
         WHERE concept_id = ?
-    ''', (new_hit_rate, today, next_review_date, concept_id))
+    ''', (new_interval, new_repetitions, new_ease_factor, today, next_review_date, concept_id))
     
     return new_interval
 
 def main():
     print("\n" + "="*40)
-    print("      NIHONGOGRAPH - SRS ENGINE")
+    print("      KIOKU ENGINE - SRS CORE (SM-2)")
     print("="*40)
 
     with sqlite3.connect(DB_PATH) as conn:
@@ -67,7 +74,7 @@ def main():
         print(f"\nYou have {len(due_items)} concept(s) to review today.\n")
 
         for item in due_items:
-            concept_id, kanji, hiragana, hit_rate, last_rev, next_rev = item
+            concept_id, kanji, hiragana, interval_days, repetitions, ease_factor = item
             
             print(f"\nTarget: {kanji}")
             user_reading = input("Enter reading (in Romaji or Kana): ").strip()
@@ -83,7 +90,7 @@ def main():
                 print(f"  [WRONG] The correct reading was: {hiragana}.")
 
             # Calculate and save the new review date
-            new_interval = update_progress(cursor, concept_id, passed, hit_rate, last_rev)
+            new_interval = update_progress(cursor, concept_id, passed, interval_days, repetitions, ease_factor)
             conn.commit()
             
             print(f"  -> Next review scheduled in {new_interval} day(s).")
